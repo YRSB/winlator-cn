@@ -51,10 +51,14 @@ jobs:
             -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
 
       # 不传 -PskipNative，且保留 cpp 目录：执行完整的 CMake + NDK 编译。
+      # assets 有 203MB，compressReleaseAssets 会在内存里压缩整棵 assets 树。
+      # Gradle 默认堆只有 512MB，必然 OOM（"Java heap space"），所以显式给到 6GB。
+      # 同时限制 worker 数，避免多进程各自吃堆。
       - name: Build release APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon \
+          ./gradlew assembleRelease --no-daemon --max-workers=2 \
+            -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g" \
             -Pandroid.injected.signing.store.file=$PWD/debug.keystore \
             -Pandroid.injected.signing.store.password=android \
             -Pandroid.injected.signing.key.alias=androiddebugkey \
