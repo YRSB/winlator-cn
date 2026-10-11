@@ -1,0 +1,77 @@
+name: 编译apk（全量：assets + 原生）
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+env:
+  JAVA_VERSION: '17'
+  NDK_VERSION: '24.0.8215888'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          lfs: false
+          fetch-depth: 1
+
+      # 注意：这里刻意不删 app/src/main/assets。
+      # assets 是普通 git blob（仓库无 .gitattributes，无 LFS），
+      # 所以 lfs: false 依然能拿到完整的 203MB assets。
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          # 不能用该 action 的默认值 "tools platform-tools"：Google 已将遗留的
+          # tools(Android SDK Tools) 包从 SDK 仓库下架，sdkmanager tools 会报
+          # "Failed to find package 'tools'" 并让本步骤以退出码 1 失败。
+          packages: platform-tools
+
+      - name: Install NDK and CMake
+        run: sdkmanager --install "ndk;${{ env.NDK_VERSION }}" "cmake;3.22.1"
+
+      - name: Create debug keystore
+        run: |
+          keytool -genkey -v -keystore debug.keystore \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
+
+      # 不传 -PskipNative，且保留 cpp 目录：执行完整的 CMake + NDK 编译。
+      - name: Build release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file=$PWD/debug.keystore \
+            -Pandroid.injected.signing.store.password=android \
+            -Pandroid.injected.signing.key.alias=androiddebugkey \
+            -Pandroid.injected.signing.key.password=android
+
+      - name: Rename APK
+        run: |
+          BRANCH=${GITHUB_REF#refs/heads/}
+          BRANCH=${BRANCH//\//-}
+          SHA=$(git rev-parse --short HEAD)
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          mv app/build/outputs/apk/release/app-release.apk "Winlator-full-${BRANCH}-${SHA}-${TIMESTAMP}.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-full
+          path: "*.apk"
+          retention-days: 7
+          compression-level: 0
